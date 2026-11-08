@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Name That Game</title>
+<style>
+  :root {
+    --bg: #14121a; --panel: #1f1c28; --ink: #ece8f4; --muted: #9a93ad;
+    --accent: #f2b33d; --good: #4fc27a; --bad: #e0565b; --line: #332e40;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; justify-content: center; padding: 32px 16px;
+  }
+  main { width: 100%; max-width: 640px; }
+  header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 4px; }
+  h1 { font-size: 28px; margin: 0; }
+  #score { font-size: 20px; font-weight: 700; color: var(--accent); white-space: nowrap; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .game { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 12px; }
+  .game.won { border-color: var(--good); }
+  .game.lost { border-color: var(--bad); }
+  .top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .top .title { margin-right: auto; }
+  .top h2 { font-size: 17px; margin: 0; }
+  .hint { font-size: 13px; color: var(--muted); }
+  .play {
+    padding: 8px 14px; font-size: 15px; font-weight: 600;
+    background: var(--accent); color: #1a1405; border: 0; border-radius: 8px; cursor: pointer;
+  }
+  .play:disabled { background: transparent; color: var(--muted); border: 1px dashed var(--line); cursor: not-allowed; }
+  form { display: flex; gap: 8px; margin-top: 12px; }
+  input {
+    flex: 1; min-width: 0; padding: 10px 12px; font-size: 16px; color: var(--ink);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px; outline: none;
+  }
+  input:focus { border-color: var(--accent); }
+  .guess { padding: 10px 16px; font-size: 15px; font-weight: 600; background: var(--ink); color: var(--bg); border: 0; border-radius: 8px; cursor: pointer; }
+  .status { margin-top: 8px; font-size: 15px; color: var(--muted); min-height: 1.5em; }
+  .status b { color: var(--ink); }
+  .final { text-align: center; font-size: 20px; margin-top: 20px; }
+</style>
+</head>
+<body>
+<main>
+  <header><h1>🔊 Name That Game</h1><span id="score">0 / 10</span></header>
+  <p class="sub">Guess right from Sound 1 for 2 points. Miss and Sound 2 unlocks for one more guess, worth 1 point.</p>
+  <div id="games"></div>
+  <p class="final" id="final"></p>
+</main>
+
+<script>
+// A guess is right if it starts with any `series` name (so sequels and spinoffs count),
+// or is exactly a `short` name, optionally followed by a number ("re", "re4", "kh2").
+// Sounds are in play order: the subtler one first, the giveaway second.
+const GAMES = [
+  { name: "Kingdom Hearts",   series: ["kingdom hearts"], short: ["kh"],
+    sounds: ["kh_title_ag.wav", "kh_Sora!.wav"] },
+  { name: "Portal",           series: ["portal"],         short: [],
+    sounds: ["portal_portalgun_shoot_blue1.wav", "portal_escape_02_spheredestroy1-01.wav"] },
+  { name: "Half-Life 2",      series: ["half life"],      short: ["hl"],
+    sounds: ["hl2_physcannon_charge.wav", "hl2_ammo_depleted.wav"] },
+  { name: "Metal Gear Solid", series: ["metal gear"],     short: ["mgs"],
+    sounds: ["mgs_dead.wav", "mgs_footprints.wav"] },
+  { name: "Resident Evil 4",  series: ["resident evil"],  short: ["re"],
+    sounds: ["re4_attache_equip.wav", "re4_chain_strat.ogg"] },
+];
+
+const ROMAN = { i: "1", ii: "2", iii: "3", iv: "4", v: "5", vi: "6", vii: "7", viii: "8", ix: "9", x: "10" };
+
+// "Half-Life II" -> "halflife2": lowercase, roman numerals to digits, drop punctuation and spaces.
+function norm(s) {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
+    .split(" ").map(w => ROMAN[w] || w).join("");
+}
+
+function editDistance(a, b) {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++)
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length][b.length];
+}
+
+function isMatch(guess, game) {
+  const g = norm(guess);
+  if (!g) return false;
+  if (game.short.some(s => new RegExp(`^${s}\\d*$`).test(g))) return true;
+  return game.series.some(name => {
+    const s = norm(name);
+    // Allow a typo or two in longer names; short ones like "portal" must be exact
+    // so near-misses such as "postal" aren't accepted.
+    const tol = s.length >= 10 ? 2 : s.length >= 8 ? 1 : 0;
+    for (let k = s.length - tol; k <= s.length + tol; k++)
+      if (k <= g.length && editDistance(g.slice(0, k), s) <= tol) return true;
+    return false;
+  });
+}
+
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+let audio = null, score = 0, finished = 0;
+const results = [];  // points per game, in game order
+
+function play(file) {
+  if (audio) audio.pause();
+  audio = new Audio("sounds/" + encodeURIComponent(file));
+  audio.play();
+}
+
+function addGame(game, n) {
+  const el = document.createElement("section");
+  el.className = "game";
+  el.innerHTML = `
+    <div class="top">
+      <div class="title">
+        <h2>Game ${n}</h2>
+        ${n === 1 ? `<div class="hint">Short names accepted, e.g. aw2 for Alan Wake 2</div>` : ""}
+      </div>
+      <button class="play" type="button">▶ Sound 1</button>
+      <button class="play" type="button" disabled>🔒 Sound 2</button>
+    </div>
+    <form autocomplete="off">
+      <input placeholder="Type the game…" aria-label="Game ${n} guess">
+      <button class="guess">Guess</button>
+    </form>
+    <div class="status"></div>`;
+  const [p1, p2] = el.querySelectorAll(".play");
+  const form = el.querySelector("form"), input = el.querySelector("input"), status = el.querySelector(".status");
+  let misses = 0;
+
+  p1.onclick = () => play(game.sounds[0]);
+  p2.onclick = () => play(game.sounds[1]);
+
+  const end = (points, text) => {
+    score += points;
+    results[n - 1] = points;
+    finished++;
+    form.remove();
+    el.classList.add(points ? "won" : "lost");
+    status.innerHTML = text;
+    document.getElementById("score").textContent = `${score} / ${GAMES.length * 2}`;
+    if (finished === GAMES.length)
+      document.getElementById("final").innerHTML =
+        `${results.map(p => ["🟥", "🟨", "🟩"][p]).join("")}<br>Final score: ${score} / ${GAMES.length * 2}`;
+  };
+  const unlock = () => { p2.disabled = false; p2.textContent = "▶ Sound 2"; };
+
+  form.onsubmit = e => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = "";
+    if (isMatch(text, game)) {
+      unlock();
+      return end(misses ? 1 : 2, `✅ <b>${game.name}</b>`);
+    }
+    if (++misses === 2) return end(0, `❌ “${esc(text)}” is wrong too. It was <b>${game.name}</b>.`);
+    unlock();
+    status.textContent = `❌ Not “${text}”. Sound 2 is unlocked; one guess left.`;
+    play(game.sounds[1]);
+  };
+
+  document.getElementById("games").appendChild(el);
+}
+
+GAMES.forEach((g, i) => addGame(g, i + 1));
+</script>
+</body>
+</html>
